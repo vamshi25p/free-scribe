@@ -8,9 +8,15 @@ class MyTranscriptionPipeline {
 
     static async getInstance(progress_callback = null) {
         if (this.instance === null) {
-            this.instance = await pipeline(this.task, null, { progress_callback })
+            try {
+                console.log("Loading Whisper model...");
+                this.instance = await pipeline(this.task, this.model, { progress_callback })
+                console.log("Model loaded successfully.");
+            } catch (error) {
+                console.error("Failed to load Whisper model:", error);
+                throw error;
+            }
         }
-
         return this.instance
     }
 }
@@ -30,27 +36,34 @@ async function transcribe(audio) {
     try {
         pipeline = await MyTranscriptionPipeline.getInstance(load_model_callback)
     } catch (err) {
-        console.log(err.message)
+        console.log("Error initializing pipeline:", err.message)
+        return
     }
 
     sendLoadingMessage('success')
 
     const stride_length_s = 5
 
-    const generationTracker = new GenerationTracker(pipeline, stride_length_s)
-    await pipeline(audio, {
-        top_k: 0,
-        do_sample: false,
-        chunk_length: 30,
-        stride_length_s,
-        return_timestamps: true,
-        callback_function: generationTracker.callbackFunction.bind(generationTracker),
-        chunk_callback: generationTracker.chunkCallback.bind(generationTracker)
-    })
-    generationTracker.sendFinalResult()
+    try {
+        const generationTracker = new GenerationTracker(pipeline, stride_length_s)
+        await pipeline(audio, {
+            top_k: 0,
+            do_sample: false,
+            chunk_length: 30,
+            stride_length_s,
+            return_timestamps: true,
+            callback_function: generationTracker.callbackFunction.bind(generationTracker),
+            chunk_callback: generationTracker.chunkCallback.bind(generationTracker)
+        })
+        generationTracker.sendFinalResult()
+    } catch (error) {
+        console.error("Error during transcription:", error)
+        sendLoadingMessage('error')
+    }
 }
 
 async function load_model_callback(data) {
+    console.log("Model loading status:", data); // Debugging log
     const { status } = data
     if (status === 'progress') {
         const { file, progress, loaded, total } = data
@@ -80,7 +93,7 @@ class GenerationTracker {
         this.pipeline = pipeline
         this.stride_length_s = stride_length_s
         this.chunks = []
-        this.time_precision = pipeline?.processor.feature_extractor.config.chunk_length / pipeline.model.config.max_source_positions
+        this.time_precision = pipeline?.processor?.feature_extractor?.config?.chunk_length / pipeline?.model?.config?.max_source_positions || 1
         this.processed_chunks = []
         this.callbackFunctionCounter = 0
     }
@@ -124,7 +137,6 @@ class GenerationTracker {
             return this.processChunk(chunk, index)
         })
 
-
         createResultMessage(
             this.processed_chunks, false, this.getLastChunkTimestamp()
         )
@@ -146,7 +158,6 @@ class GenerationTracker {
             start: Math.round(start),
             end: Math.round(end) || Math.round(start + 0.9 * this.stride_length_s)
         }
-
     }
 }
 
